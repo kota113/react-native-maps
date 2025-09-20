@@ -3,15 +3,11 @@ package com.rnmaps.maps;
 import static androidx.core.content.PermissionChecker.checkSelfPermission;
 
 import android.app.Activity;
-import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Point;
 import android.location.Location;
-
-import androidx.lifecycle.DefaultLifecycleObserver;
-import androidx.lifecycle.LifecycleOwner;
 
 import android.os.Bundle;
 import android.view.GestureDetector;
@@ -26,7 +22,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.PermissionChecker;
 
-import com.facebook.react.common.MapBuilder;
+import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.LifecycleOwner;
 
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -37,6 +34,7 @@ import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeArray;
 import com.facebook.react.bridge.WritableNativeMap;
+import com.facebook.react.common.MapBuilder;
 import com.facebook.react.uimanager.ThemedReactContext;
 import com.facebook.react.uimanager.UIManagerHelper;
 import com.facebook.react.uimanager.events.Event;
@@ -74,23 +72,50 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParserException;
 
+
+
+import com.rnmaps.fabric.event.OnCalloutPressEvent;
+import com.rnmaps.fabric.event.OnDeselectEvent;
+import com.rnmaps.fabric.event.OnDoublePressEvent;
+import com.rnmaps.fabric.event.OnDragEndEvent;
+import com.rnmaps.fabric.event.OnDragEvent;
+import com.rnmaps.fabric.event.OnDragStartEvent;
+import com.rnmaps.fabric.event.OnIndoorBuildingFocusedEvent;
+import com.rnmaps.fabric.event.OnIndoorLevelActivatedEvent;
+import com.rnmaps.fabric.event.OnKmlReadyEvent;
+import com.rnmaps.fabric.event.OnLongPressEvent;
+import com.rnmaps.fabric.event.OnMapLoadedEvent;
+import com.rnmaps.fabric.event.OnMapReadyEvent;
+import com.rnmaps.fabric.event.OnMarkerDeselectEvent;
+import com.rnmaps.fabric.event.OnMarkerDragEndEvent;
+import com.rnmaps.fabric.event.OnMarkerDragEvent;
+import com.rnmaps.fabric.event.OnMarkerDragStartEvent;
+import com.rnmaps.fabric.event.OnMarkerPressEvent;
+import com.rnmaps.fabric.event.OnMarkerSelectEvent;
+import com.rnmaps.fabric.event.OnPanDragEvent;
+import com.rnmaps.fabric.event.OnPoiClickEvent;
+import com.rnmaps.fabric.event.OnPressEvent;
+import com.rnmaps.fabric.event.OnRegionChangeCompleteEvent;
+import com.rnmaps.fabric.event.OnRegionChangeEvent;
+import com.rnmaps.fabric.event.OnRegionChangeStartEvent;
+import com.rnmaps.fabric.event.OnSelectEvent;
+import com.rnmaps.fabric.event.OnUserLocationChangeEvent;
+
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-import com.rnmaps.fabric.event.*;
 
 public class MapView extends com.google.android.gms.maps.MapView implements GoogleMap.InfoWindowAdapter,
         GoogleMap.OnMarkerDragListener, OnMapReadyCallback, GoogleMap.OnPoiClickListener, GoogleMap.OnIndoorStateChangeListener, DefaultLifecycleObserver {
     public GoogleMap map;
     private Bundle savedMapState;
     private Map<Integer, MapFeature> savedFeatures = new HashMap<>();
+    private boolean shouldRestorePadding = false;
 
     private MarkerManager markerManager;
     private MarkerManager.Collection markerCollection;
@@ -105,6 +130,7 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     private RelativeLayout mapLoadingLayout;
     private ImageView cacheImageView;
     private Boolean isMapLoaded = false;
+    private Boolean isMapViewCreated = false;
 
     private Boolean isMapReady = false;
 
@@ -168,85 +194,63 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     private Boolean scrollDuringRotateOrZoomEnabled;
     private String kmlSrc = null;
 
-    private static boolean contextHasBug(Context context) {
-        return context == null ||
-                context.getResources() == null ||
-                context.getResources().getConfiguration() == null;
-    }
 
-    // We do this to fix this bug:
-    // https://github.com/react-native-maps/react-native-maps/issues/271
-    //
-    // which conflicts with another bug regarding the passed in context:
-    // https://github.com/react-native-maps/react-native-maps/issues/1147
-    //
-    // Doing this allows us to avoid both bugs.
-    private static Context getNonBuggyContext(ThemedReactContext reactContext,
-                                              ReactApplicationContext appContext) {
-        Context superContext = reactContext;
-        if (!contextHasBug(appContext.getCurrentActivity())) {
-            superContext = appContext.getCurrentActivity();
-        } else if (contextHasBug(superContext)) {
-            // we have the bug! let's try to find a better context to use
-            if (!contextHasBug(reactContext.getCurrentActivity())) {
-                superContext = reactContext.getCurrentActivity();
-            } else if (!contextHasBug(reactContext.getApplicationContext())) {
-                superContext = reactContext.getApplicationContext();
-            }
 
+    @Override
+    public void onCreate(@NonNull LifecycleOwner owner) {
+        if (isMapViewCreated || destroyed) {
+            return;
         }
-        return superContext;
-    }
-
-
-    @Override
-    public void onCreate(LifecycleOwner owner) {
-        super.onCreate(null);
+        MapView.this.onCreate((Bundle) null);
+        isMapViewCreated = true;
     }
 
     @Override
-    public void onStart(LifecycleOwner owner) {
-        super.onStart();
-    }
-
-    @Override
-    public void onResume(LifecycleOwner owner) {
-        if (hasPermissions() && map != null) {
-            //noinspection MissingPermission
-            map.setMyLocationEnabled(showUserLocation);
-            map.setLocationSource(fusedLocationSource);
+    public void onStart(@NonNull LifecycleOwner owner) {
+        if (destroyed) {
+            return;
         }
+        MapView.this.onStart();
+    }
+
+    @Override
+    public void onResume(@NonNull LifecycleOwner owner) {
         synchronized (MapView.this) {
             if (!destroyed) {
+                if (hasPermissions() && map != null) {
+                    //noinspection MissingPermission
+                    map.setMyLocationEnabled(showUserLocation);
+                    map.setLocationSource(fusedLocationSource);
+                }
                 MapView.this.onResume();
+                paused = false;
             }
-            paused = false;
         }
     }
 
 
     @Override
-    public void onPause(LifecycleOwner owner) {
-        super.onPause();
-        if (hasPermissions() && map != null) {
-            //noinspection MissingPermission
-            map.setMyLocationEnabled(false);
-        }
+    public void onPause(@NonNull LifecycleOwner owner) {
         synchronized (MapView.this) {
             if (!destroyed) {
+                if (hasPermissions() && map != null) {
+                    //noinspection MissingPermission
+                    map.setMyLocationEnabled(false);
+                }
                 MapView.this.onPause();
+                paused = true;
             }
-            paused = true;
+
         }
     }
 
-    @Override
-    public void onStop(LifecycleOwner owner) {
-        super.onStop();
-    }
+    // @Override
+    // public void onStop(LifecycleOwner owner) {
+    //     super.onStop();
+    // }
 
     @Override
-    public void onDestroy(LifecycleOwner owner) {
+    public void onDestroy(@NonNull LifecycleOwner owner) {
         MapView.this.doDestroy();
     }
 
@@ -254,9 +258,8 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
                    GoogleMapOptions googleMapOptions) {
         super(context, googleMapOptions);
         this.context = context;
-        super.getMapAsync(this);
-
-        final MapView view = this;
+        attachLifecycleObserver();
+        MapView.this.getMapAsync(this);
 
         fusedLocationSource = new FusedLocationSource(context);
 
@@ -317,52 +320,35 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         attachLifecycleObserver();
-        if (savedMapState != null) {
-            super.onCreate(savedMapState);
-            super.onStart();
-            super.onResume();
-            prepareAttacherView();
-            getMapAsync((map)->{
-                onMapReady(map);
-                savedFeatures.forEach((index, feature) -> {
-                    addFeature(feature, index);
-                });
-            });
-        }
     }
 
     // Override onDetachedFromWindow to detach lifecycle observer
     @Override
     protected void onDetachedFromWindow() {
-        if (savedMapState == null) {
-            savedMapState = new Bundle();
-        }
-        super.onSaveInstanceState(savedMapState);
-        super.onPause();
-        super.onStop();
-        savedFeatures = new HashMap<>(features);
-        savedFeatures.keySet().forEach(this::removeFeatureAt);
-        removeView(attacherGroup);
-        attacherGroup = null;
-        detachLifecycleObserver();
         super.onDetachedFromWindow();
+        detachLifecycleObserver();
     }
 
     // Method to attach lifecycle observer
     private void attachLifecycleObserver() {
         Activity activity = context.getCurrentActivity();
-        if (activity instanceof LifecycleOwner && !isLifecycleObserverAttached) {
-            currentLifecycleOwner = (LifecycleOwner) activity;
+        if (activity instanceof LifecycleOwner newOwner) {
+            if (currentLifecycleOwner == newOwner) {
+                return;
+            }
+            if (currentLifecycleOwner != null) {
+                currentLifecycleOwner.getLifecycle().removeObserver(this);
+            }
+
+            currentLifecycleOwner = newOwner;
             currentLifecycleOwner.getLifecycle().addObserver(this);
-            isLifecycleObserverAttached = true;
         }
     }
 
     // Method to detach lifecycle observer
     private void detachLifecycleObserver() {
-        if (currentLifecycleOwner != null && isLifecycleObserverAttached) {
+        if (currentLifecycleOwner != null) {
             currentLifecycleOwner.getLifecycle().removeObserver(this);
-            isLifecycleObserverAttached = false;
             currentLifecycleOwner = null;
         }
     }
@@ -746,16 +732,12 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
         }
         destroyed = true;
 
-        // Detach lifecycle observer before destroying
-        detachLifecycleObserver();
-        savedMapState = null;
-        savedFeatures = null;
-
         if (!paused) {
-            onPause();
+            MapView.this.onPause();
             paused = true;
         }
-        onDestroy();
+        MapView.this.onDestroy();
+        detachLifecycleObserver();
     }
 
     public void setInitialCameraSet(boolean initialCameraSet) {
@@ -1129,13 +1111,11 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
 
             // Remove from a view group if already present, prevent "specified child
             // already had a parent" error.
-            ViewGroup annotationParent = (ViewGroup) annotation.getParent();
-            if (annotationParent != null) {
-                annotationParent.removeView(annotation);
+            safeRemoveFromParent(annotation);
+            // Add to the parent group safely
+            if (attacherGroup != null) {
+                attacherGroup.addView(annotation);
             }
-
-            // Add to the parent group
-            attacherGroup.addView(annotation);
 
             // Trigger visibility event if necessary.
             // With some testing, seems like it is not always
@@ -1213,7 +1193,7 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
         if (feature instanceof MapMarker) {
             markerMap.remove(feature.getFeature());
             feature.removeFromMap(markerCollection);
-            attacherGroup.removeView(feature);
+            safeRemoveFeatureFromAttacherGroup(feature);
         } else if (feature instanceof MapHeatmap) {
             heatmapMap.remove(feature.getFeature());
             feature.removeFromMap(map);
@@ -1551,12 +1531,12 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
 
         switch (action) {
             case (MotionEvent.ACTION_DOWN):
-                this.getParent().requestDisallowInterceptTouchEvent(
+                safeRequestDisallowInterceptTouchEvent(
                         map != null && map.getUiSettings().isScrollGesturesEnabled());
                 break;
             case (MotionEvent.ACTION_UP):
                 // Clear this regardless, since isScrollGesturesEnabled() may have been updated
-                this.getParent().requestDisallowInterceptTouchEvent(false);
+                safeRequestDisallowInterceptTouchEvent(false);
                 break;
         }
         super.dispatchTouchEvent(ev);
@@ -1644,14 +1624,14 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
 
     private void removeCacheImageView() {
         if (this.cacheImageView != null) {
-            ((ViewGroup) this.cacheImageView.getParent()).removeView(this.cacheImageView);
+            safeRemoveFromParent(this.cacheImageView);
             this.cacheImageView = null;
         }
     }
 
     private void removeMapLoadingProgressBar() {
         if (this.mapLoadingProgressBar != null) {
-            ((ViewGroup) this.mapLoadingProgressBar.getParent()).removeView(this.mapLoadingProgressBar);
+            safeRemoveFromParent(this.mapLoadingProgressBar);
             this.mapLoadingProgressBar = null;
         }
     }
@@ -1659,7 +1639,7 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     private void removeMapLoadingLayoutView() {
         this.removeMapLoadingProgressBar();
         if (this.mapLoadingLayout != null) {
-            ((ViewGroup) this.mapLoadingLayout.getParent()).removeView(this.mapLoadingLayout);
+            safeRemoveFromParent(this.mapLoadingLayout);
             this.mapLoadingLayout = null;
         }
     }
@@ -1898,5 +1878,55 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
             layout(getLeft(), getTop(), getRight(), getBottom());
         }
     };
+
+
+    /**
+     * Safely removes a view from its parent ViewGroup.
+     * Prevents NullPointerException during component lifecycle operations.
+     *
+     * @param view The view to remove from its parent
+     * @return true if the view was successfully removed, false otherwise
+     */
+    private boolean safeRemoveFromParent(View view) {
+        if (view != null) {
+            ViewGroup parent = (ViewGroup) view.getParent();
+            if (parent != null) {
+                parent.removeView(view);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Safely requests touch event handling from parent ViewGroup.
+     * Prevents NullPointerException during touch event dispatching.
+     *
+     * @param disallowIntercept Whether to disallow parent touch interception
+     * @return true if the request was successfully made, false otherwise
+     */
+    private boolean safeRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {
+        ViewGroup parent = (ViewGroup) this.getParent();
+        if (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(disallowIntercept);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Safely removes a MapFeature from the attacherGroup.
+     * Prevents NullPointerException during feature removal operations.
+     *
+     * @param feature The MapFeature to remove from attacherGroup
+     * @return true if the feature was successfully removed, false otherwise
+     */
+    private boolean safeRemoveFeatureFromAttacherGroup(MapFeature feature) {
+        if (attacherGroup != null && feature != null) {
+            attacherGroup.removeView(feature);
+            return true;
+        }
+        return false;
+    }
 
 }
